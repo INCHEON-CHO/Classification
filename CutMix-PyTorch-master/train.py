@@ -57,9 +57,9 @@ parser.add_argument('--alpha', default=300, type=float,
                     help='number of new channel increases per depth (default: 300)')
 parser.add_argument('--expname', default='TEST', type=str,
                     help='name of experiment')
-parser.add_argument('--beta', default=0, type=float,
-                    help='hyperparameter beta')
-parser.add_argument('--cutmix_prob', default=0, type=float,
+parser.add_argument('--alpha',default=2, type=float, help='hyperparameter alpha')
+parser.add_argument('--beta', default=5, type=float, help='hyperparameter beta')
+parser.add_argument('--cutmix_prob', default=1, type=float,
                     help='cutmix probability')
 
 parser.set_defaults(bottleneck=True)
@@ -230,11 +230,16 @@ def train(train_loader, model, criterion, optimizer, epoch):
         r = np.random.rand(1)
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
-            lam = np.random.beta(args.beta, args.beta)
-            rand_index = torch.randperm(input.size()[0]).cuda()
+            lam1 = np.random.beta(args.alpha, args.beta)
+            rand_index1 = torch.randperm(input.size()[0]).cuda()
+            lam2 = np.random.beta(args.alpha, args.beta)
+            rand_index2 = torch.randperm(input.size()[0]).cuda()
+
             target_a = target
-            target_b = target[rand_index]
-            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
+            target_b = target[rand_index1]
+            target_c = target[rand_index2]
+            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam1)
+
             input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
             # adjust lambda to exactly match pixel ratio
             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
