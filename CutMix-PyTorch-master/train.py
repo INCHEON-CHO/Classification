@@ -230,25 +230,43 @@ def train(train_loader, model, criterion, optimizer, epoch):
         r = np.random.rand(1)
         if args.beta > 0 and r < args.cutmix_prob:
             # generate mixed sample
-            lam1 = np.random.beta(args.alpha, args.beta)
+            lam1, lam2, _ = np.random.dirichlet([1,1,1]) #dirichlet distribution 균등하게 뽑음
             rand_index1 = torch.randperm(input.size()[0]).cuda()
-            lam2 = np.random.beta(args.alpha, args.beta)
             rand_index2 = torch.randperm(input.size()[0]).cuda()
 
             target_a = target
             target_b = target[rand_index1]
             target_c = target[rand_index2]
-            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam1)
+            box_list = rand_bbox(input.size(), lam1, lam2) #bbx1, bby1, bbx2, bby2
 
-            input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
+            input[:, :, box_list[0][0]:box_list[0][2], box_list[0][1]:box_list[0][3]] = input[rand_index1, :, box_list[0][0]:box_list[0][2], box_list[0][1]:box_list[0][3]]
+            input[:, :, box_list[1][0]:box_list[1][2], box_list[1][1]:box_list[1][3]] = input[rand_index2, :, box_list[1][0]:box_list[1][2], box_list[1][1]:box_list[1][3]]
             # adjust lambda to exactly match pixel ratio
-            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
+            # 중복된 값 제거
+            whole_value = (input.size()[-1] * input.size()[-2])
+            region = (box_list[0][2] - box_list[0][0]) * (box_list[0][3] - box_list[0][1])
+            if box_list[0][0]>=box_list[1][0] and box_list[0][1]>=box_list[1][1] and box_list[0][2]<=box_list[1][2] and box_list[0][3]<= box_list[1][3]:
+                lam1 = 0
+            elif box_list[0][2]>box_list[1][0] and box_list[0][3]>box_list[1][1]:
+                lam1 = region - (box_list[0][2]-box_list[1][0]) * (box_list[0][3]-box_list[1][1])
+            elif box_list[0][0]<box_list[1][2] and box_list[1][1]<box_list[0][3]:
+                lam1 = region - (box_list[1][2]-box_list[0][0]) * (box_list[0][3]-box_list[1][1])
+            elif box_list[0][0]<box_list[1][2] and box_list[0][1]<box_list[1][3]:
+                lam1 = region - (box_list[1][2]-box_list[0][0]) * (box_list[1][3]-box_list[0][1])
+            elif box_list[0][2]>box_list[1][0] and box_list[0][1]<box_list[1][3]:
+                lam1 = region - (box_list[1][0]-box_list[0][2]) * (box_list[1][3]-box_list[0][1])
+            else:
+                lam1 = region
+            
+            lam1 /= whole_value
+            lam2 = (box_list[1][2] - box_list[1][0]) * (box_list[1][3] - box_list[1][1]) / whole_value
             # compute output
             input_var = torch.autograd.Variable(input, requires_grad=True)
             target_a_var = torch.autograd.Variable(target_a)
             target_b_var = torch.autograd.Variable(target_b)
+            target_c_var = torch.autograd.Variable(target_c)
             output = model(input_var)
-            loss = criterion(output, target_a_var) * lam + criterion(output, target_b_var) * (1. - lam)
+            loss = criterion(output, target_a_var) * (1-lam1-lam2) + criterion(output, target_b_var) * lam1 + criterion(output, target_c_var) * lam2
         else:
             # compute output
             input_var = torch.autograd.Variable(input, requires_grad=True)
@@ -289,23 +307,27 @@ def train(train_loader, model, criterion, optimizer, epoch):
     return losses.avg
 
 
-def rand_bbox(size, lam):
+def rand_bbox(size, lam1, lam2):
     W = size[2]
     H = size[3]
-    cut_rat = np.sqrt(1. - lam)
-    cut_w = np.int(W * cut_rat)
-    cut_h = np.int(H * cut_rat)
+    box_list = []
+    lam_list = [lam1, lam2]
+    for i in range(2):
+        cut_rat = np.sqrt(1. - lam_list[i])
+        cut_w = np.int(W * cut_rat)
+        cut_h = np.int(H * cut_rat)
 
-    # uniform
-    cx = np.random.randint(W)
-    cy = np.random.randint(H)
+        # uniform
+        cx = np.random.randint(W)
+        cy = np.random.randint(H)
 
-    bbx1 = np.clip(cx - cut_w // 2, 0, W)
-    bby1 = np.clip(cy - cut_h // 2, 0, H)
-    bbx2 = np.clip(cx + cut_w // 2, 0, W)
-    bby2 = np.clip(cy + cut_h // 2, 0, H)
+        bbx1 = np.clip(cx - cut_w // 2, 0, W)
+        bby1 = np.clip(cy - cut_h // 2, 0, H)
+        bbx2 = np.clip(cx + cut_w // 2, 0, W)
+        bby2 = np.clip(cy + cut_h // 2, 0, H)
+        box_list.append([bbx1,bby1,bbx2,bby2])
 
-    return bbx1, bby1, bbx2, bby2
+    return box_list
 
 
 def validate(val_loader, model, criterion, epoch):
